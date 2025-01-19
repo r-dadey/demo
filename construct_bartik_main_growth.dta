@@ -5,7 +5,7 @@ eststo clear
 
 local data  ACS //  Data source:  `data' or `data'
 global bartik employed
-global vari ind
+global vari occ
 global lag 1
 global weight n
 
@@ -34,6 +34,16 @@ if "`data'"  == "CPS" {
 
 else collapse (rawsum) employed $weight (mean) emprate incwage_real [aw=$weight] if year >= `baseyr', by(`geo' ${vari} year)
 
+
+* Generate actual employment growth per `geo' (what we're instrumenting for)
+preserve
+collapse (rawsum) $bartik, by(`geo' year)
+bysort `geo' (year): gen log_change = (($bartik) - ($bartik[_n-$lag]))/$bartik[_n-$lag]
+label var log_change "Change in log employment"
+tempfile actual_growth
+save `actual_growth', replace
+restore
+
 * Generate base year industry employment share by geo
 preserve
 keep if year == `baseyr'
@@ -48,14 +58,17 @@ restore
 * Generate national growth
 preserve
 collapse (rawsum) ${bartik}_nat = $bartik, by(${vari} year)
-tempfile national
-save `national', replace
+bysort ${vari} (year): gen national_growth = ($bartik - $bartik[_n-$lag])/$bartik[_n-$lag]
+bysort ${vari} (year): gen national_change = ($bartik - $bartik[_n-$lag])
+label var national_growth "National industry growth"
+tempfile national_growth
+save `national_growth', replace
 restore
 
 * Generate own employment growth per industry x `geo'
 bysort `geo' ${vari} (year): gen own_growth = ($bartik - $bartik[_n-$lag])/$bartik[_n-$lag]
 
-merge m:1 ${vari} year using `national', nogen keep(master match)
+merge m:1 ${vari} year using `national_growth', nogen keep(master match)
 merge m:1 `geo' ${vari} using `share_`baseyr'', nogen keep(master match)
 
 bysort `geo' ${vari} (year):  gen leaveout_growth = (national_change - ($bartik - $bartik[_n-$lag]))/(${bartik}_nat[_n-$lag] - $bartik[_n-$lag])
@@ -82,12 +95,16 @@ else local suffix _L$lag
 save "${`data'}/`data'_bartik_${vari}`suffix'.dta", replace
 drop if year > 2021
 
+su log_change, detail
+drop if !inrange(log_change, `r(p1)', `r(p99)')
+
 su bartik, detail
 drop if !inrange(bartik, `r(p1)', `r(p99)')
 
+replace log_change = log_change*100
 replace bartik = bartik*100
 * Some first stage-plots
-binscatter2 $bartik bartik [aw=$weight], ///
+binscatter2 log_change bartik [aw=$weight], ///
 	name(bartik_binscatter, replace) ///
 	xtitle("Bartik (%)") ytitle("Employment Growth (%)") 
 foreach path in "" "_overleaf" {
@@ -118,3 +135,31 @@ twoway scatter bartik log_change year, ///
 foreach path in "" "_overleaf" {
 	graph export "${figures`path'}/bartik_scatter_`data'_${vari}`suffix'.pdf", replace
 }
+
+
+/*
+foreach var of varlist bartik* log_change {
+	bysort year: egen m`var' = mean(`var')
+	generate `var'd = `var' - m`var'
+	drop m`var'
+}
+*/
+
+/*
+preserve
+keep if inlist(year, 2006, 2012, 2018, 2021)
+gen to_show = "{&Beta} = "
+regress log_changed bartikd if year == 2006
+replace to_show = to_show + string(round(e(b)[1,1],0.0001)) if year == 2006
+regress log_changed bartikd if year == 2012
+bysort year: replace to_show = to_show + string(round(e(b)[1,1],0.0001)) if year == 2012
+regress log_changed bartikd if year == 2018
+bysort year: replace to_show = to_show + string(round(e(b)[1,1],0.0001)) if year == 2018
+regress log_changed bartikd if year == 2021
+bysort year: replace to_show = to_show + string(round(e(b)[1,1],0.0001)) if year == 2021
+
+twoway scatter log_changed bartikd, by(year, legend(off) note("") rescale) 
+restore
+*/
+
+	   
